@@ -1,0 +1,326 @@
+---
+title: "HIV epidemic in the World, 2010-2023"
+author: "Rodrigue Nze Eyoo" 
+format: 
+  dashboard:
+    code-fold: true
+    theme: lux
+    toc: true
+    toc-location: left
+    toc-depth: 2
+    dashboard:
+      layout: 1-2  # Layout for the dashboard
+logo: images/red_ribbon.png
+editor_options:
+  chunk_output_type: inline
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r}
+# Load packages 
+if(!require(pacman)) install.packages("pacman")
+pacman::p_load(tidyverse, here, sf, outbreaks, bslib, bsicons, 
+               shiny, rnaturalearth, rnaturalearthdata,  
+               rgeoboundaries, plotly, ggspatial,
+               ggplot2, mdsr, terra, spData, readr, countrycode,                htmltools, reactable,janitor, 
+               gapminder, tidyr, dplyr, stringr)
+
+```
+
+```{r}
+# Data Import: 
+## Global hiv deaths raw (Source: UNAIDS AIDSinfo)
+library(readr)
+Global_AIDS_Related_Deaths <- read_csv("Data/Global_AIDS-Related_Deaths.csv")
+## Global hiv new infections (Source: UNAIDS AIDSinfo)
+library(readr)
+Global_New_HIV_Infections <- read_csv("Data/Global_new_HIV_Infections.csv")
+
+# A. Reshape the Global hiv deaths raw frame : 
+## Excluding columns that contain "_lower", "_upper", or "_Footnote"
+hiv_global_deaths_short <-Global_AIDS_Related_Deaths %>%
+ select(-matches("(_lower|_upper|_Footnote)"))
+  
+## Rename columns containing "...54" to "2023" and "...58" to "Percent_change"
+hiv_global_deaths_short <- hiv_global_deaths_short %>%
+  rename(
+    `2023` = `2023...54`, 
+    Percent_Change_Deaths = `2023...58`
+  )
+
+## Using pivot_longer to reshape the dataframe
+long_hiv_global_deaths <- hiv_global_deaths_short %>%
+  pivot_longer(
+    cols = `2010`:`2023`,   # Specifies which columns to make longer
+    names_to = "Year",      # New column for the years
+    values_to = "HIV_Deaths"     # New column for the values from year columns
+  ) %>%
+  select(Country, Year, Percent_Change_Deaths, HIV_Deaths)  # select columns
+
+## Replace '<' with '' and Convert to numeric
+ hiv_global_deaths_clean <- long_hiv_global_deaths %>%
+   mutate(
+    HIV_Deaths = str_replace_all(HIV_Deaths, "<(\\d+)", "\\1"), 
+  HIV_Deaths = as.numeric(HIV_Deaths))%>% 
+  mutate(Percent_Change_Deaths = as.numeric(Percent_Change_Deaths 
+  ))
+  
+  # B. Reshape the Global New HIV raw frame : 
+## Excluding columns that contain "_lower", "_upper", or "_Footnote"
+hiv_global_new_infections_short <- Global_New_HIV_Infections %>%
+ select(-matches("(_lower|_upper|_Footnote)"))
+  
+## Rename columns containing "...54" to "2023" and "...58" to "Percent_change"
+hiv_global_new_infections_short <-      
+  hiv_global_new_infections_short %>%
+  rename(`2023` = `2023...54`, 
+    Percent_Change_NInf = `2023...58`
+  )
+
+## Using pivot_longer to reshape the new Infections dataframe
+long_hiv_global_new_infections <- hiv_global_new_infections_short %>%
+  pivot_longer(
+    cols = `2010`:`2023`,   # Specifies which columns to make longer
+    names_to = "Year",      # New column for the years
+    values_to = "HIV_Ninf"     # New column for the values from year columns
+  ) %>%
+  select(Country, Year, Percent_Change_NInf, HIV_Ninf)  # select columns
+
+## Replace '<' with '' and Convert to numeric
+ hiv_global_new_infections_clean <-   
+   long_hiv_global_new_infections %>%
+   mutate(
+    HIV_Ninf = str_replace_all(HIV_Ninf, "<(\\d+)", "\\1"), 
+  HIV_Ninf = as.numeric(HIV_Ninf))%>% 
+  mutate(Percent_Change_NInf = as.numeric(Percent_Change_NInf
+  ))
+  
+  ## Total Global HIV Related Deaths: Count the cumulative number of HIV Deaths in the world since 2010.   
+Total_HIV_Deaths<- hiv_global_deaths_clean %>% 
+filter(!is.na(HIV_Deaths))%>%
+  summarise(Total_Deaths = sum(HIV_Deaths))
+
+## Total Global New HIV Infections: Count the cumulative number of New HIV Infections in the world since 2010.   
+Total_HIV_New_Infections <- hiv_global_new_infections_clean %>% 
+filter(!is.na(HIV_Ninf))%>%
+  summarise(Total_New_Infections = sum(HIV_Ninf))
+  
+## Percentage change in HIV New Infections: 2010-2023
+Change_NI = hiv_global_new_infections_clean[
+  hiv_global_new_infections_clean$Country == "Global" & 
+  hiv_global_new_infections_clean$Year == 2023, "Percent_Change_NInf"] ## Filter the dataframe to find rows where 'Country' equals "Global" and 'Year' equals 2023
+
+## Percentage change in HIV Related Deaths: 2010-2023
+Change_Deaths = hiv_global_deaths_clean[
+  hiv_global_deaths_clean$Country == "Global" & 
+  hiv_global_deaths_clean$Year == 2023, "Percent_Change_Deaths"]## Filter the dataframe to find rows where 'Country' equals "Global" and 'Year' equals 2023
+
+## Filtering for the year 2023, grouping by Country, and summarising to get the total new infections for each country
+country_summary_NI <- hiv_global_new_infections_clean %>%
+  filter(Year == 2023) %>%  # Filter data for the year 2023
+  group_by(Country) %>%
+  summarise(total_infections = sum(HIV_Ninf, na.rm = TRUE), .groups = 'drop')  # Sum up New_Infections, ensuring NA values are excluded
+
+# Select the top 10 countries with the highest total infections
+top_countries_NI <- country_summary_NI %>%
+  arrange(desc(total_infections)) %>%
+  slice_head(n = 10)
+
+# Plot the HIV New Infections data using ggplot2
+country_plot_NI <- ggplot(data = top_countries_NI, 
+                       mapping = aes(x = reorder(Country, -total_infections), y = total_infections)) +
+  geom_col(fill = "steelblue") +
+  labs(title = "Top 10 Countries with the Highest Number of New HIV Infections in 2023",
+       x = "Country",
+       y = "Total HIV New Infections") +
+  theme_minimal() +
+  coord_flip() # Flip the coordinates to make the plot horizontal
+
+## Filtering for the year 2023, grouping by Country, and summarising to get the total HIV Related Deaths for each country
+country_summary_D <- hiv_global_deaths_clean %>%
+  filter(Year == 2023) %>%  # Filter data for the year 2023
+  group_by(Country) %>%
+  summarise(total_deaths = sum(HIV_Deaths, na.rm = TRUE), .groups = 'drop')  # Sum up New_Infections, ensuring NA values are excluded
+
+# Select the top 10 countries with the highest total infections
+top_countries_D <- country_summary_D %>%
+  arrange(desc(total_deaths)) %>%
+  slice_head(n = 10)
+
+# Plot the HIV deaths data using ggplot2
+country_plot_D <- ggplot(data = top_countries_D, 
+                       mapping = aes(x = reorder(Country, -total_deaths), y = total_deaths)) +
+  geom_col(fill = "steelblue") +
+  labs(title = "Top 10 Countries with the Highest Number of HIV Related Deaths in 2023",
+       x = "Country",
+       y = "Total HIV Deaths") +
+  theme_minimal() +
+  coord_flip() # Flip the coordinates to make the plot horizontal
+
+# Plot of Total HIV New Infections by country in 2023
+NI_plotly<-ggplotly(country_plot_NI)
+
+#Plot of Total HIV Related Deaths by country in 2023
+  D_plotly<- ggplotly(country_plot_D)
+
+## Country name standardization and adding country polygons
+ ### Adding ISO countrycodes to "hiv_global_new_infections_clean"
+    hiv_global_new_infections_iso <- hiv_global_new_infections_clean %>%
+  mutate(ISO_Code = countrycode(Country, origin = "country.name", destination = "iso3c"))
+view(hiv_global_new_infections_iso)
+
+hiv_global_new_infections_iso_clean <- hiv_global_new_infections_iso %>%
+  filter(!is.na(HIV_Ninf) & !is.na(Percent_Change_NInf))
+
+
+# Add ISO countrycodes to "hiv_global_deaths_clean"
+hiv_global_deaths_iso <- hiv_global_deaths_clean %>%
+  mutate(ISO_Code = countrycode(Country, origin = "country.name", destination = "iso3c"))
+view(hiv_global_deaths_iso)
+
+# Load geographic data for countries
+world <- st_as_sf(ne_countries(scale = "medium", returnclass = "sf"))
+
+
+# Using a left join to keep all countries in the 'world' dataset
+hiv_NI_geo2 <- world %>%
+  left_join(hiv_global_new_infections_iso, by = c("iso_a3" = "ISO_Code"))
+
+hiv_deaths_geo2 <- world %>%
+  left_join(hiv_global_deaths_iso, by = c("iso_a3" = "ISO_Code"))
+
+# Set missing HIV infection values to 0 or NA
+hiv_NI_geo2 <- hiv_NI_geo2 %>%
+  mutate(HIV_Ninf = ifelse(is.na(HIV_Ninf), NA, HIV_Ninf)) 
+
+hiv_deaths_geo2 <- hiv_deaths_geo2 %>%
+  mutate(HIV_Deaths = ifelse(is.na(HIV_Deaths), NA, HIV_Deaths)) 
+
+# MAP SUBSETS
+
+map_subset <- hiv_NI_geo2 %>%
+  select(iso_a3, Country, Year, Percent_Change_NInf, HIV_Ninf, geometry) %>%
+ filter(!is.na(Country)) %>%
+ filter(Country != "Global") %>%
+  mutate(text_label = paste("Country:", Country))
+
+map_subset_d <- hiv_deaths_geo2 %>%
+  select(iso_a3, Country, Year, Percent_Change_Deaths, HIV_Deaths, geometry) %>%
+ filter(!is.na(Country)) %>%
+ filter(Country != "Global") %>%
+  mutate(text_label = paste("Country:", Country))
+
+
+# creating mapS
+p <- plot_geo(map_subset, locationmode = 'world') %>%
+  add_trace(
+    z = ~ map_subset$HIV_Ninf,
+    locations = map_subset$iso_a3,
+    frame =  ~ map_subset$Year,
+    color = ~ map_subset$HIV_Ninf,
+    text = ~ map_subset$text_label,
+  colorscale = "Viridis",    # Use Viridis color scale
+    reversescale = TRUE,       # Reverse the color scale to have darker colors for higher values
+    colorbar = list(
+      title = "<b>New HIV Infections</b>",  # Legend title
+      titleside = "right"
+    ))%>%
+  layout(
+    title = list(text = "HIV New Infections by Country (2010-2023)", font = list(size = 16)))
+
+  
+    
+  p2 <- plot_geo(map_subset_d, locationmode = 'world') %>%
+  add_trace(
+    z = ~ map_subset_d$HIV_Deaths,
+    locations = map_subset_d$iso_a3,
+    frame =  ~ map_subset_d$Year,
+    color = ~ map_subset_d$HIV_Deaths,
+    text = ~ map_subset_d$text_label,
+  colorscale = "Viridis",    # Use Viridis color scale
+    reversescale = TRUE,       # Reverse the color scale to have darker colors for higher values
+    colorbar = list(
+      title = "<b>HIV Deaths</b>",  # Legend title
+      titleside = "right"
+    ))%>%
+  layout(
+    title = list(text = "HIV Deaths by Country (2010-2023)", font = list(size = 16)))
+
+      
+    
+ 
+```
+
+# HOME
+
+## Row 1 {height="25%)"}
+
+```{r}
+value_box(
+  title = "Total Cumulative HIV Related Deaths:2010-2023",
+  value = Total_HIV_Deaths,
+  showcase = bsicons::bs_icon("heart-pulse-fill"),
+  theme = value_box_theme(bg = "#28a745")
+  )
+
+```
+
+```{r}
+value_box(
+  title = "Total Cumulative HIV New Infections: 2010-2023",
+  value = Total_HIV_New_Infections,
+  showcase = bsicons::bs_icon("virus"),
+  theme = value_box_theme(bg = "#FFC107")
+  )
+```
+
+```{r}
+value_box(
+  title = "Global Percentage change in HIV New Infections:2010-2023",
+  value = Change_NI,
+  showcase = bsicons::bs_icon("virus"),
+  theme = value_box_theme(bg = "#3f71ab")
+  )
+```
+
+```{r}
+value_box(
+  title = "Global Percentage change in HIV Related Deaths:2010-2023",
+  value = Change_Deaths,
+  showcase = bsicons::bs_icon("heart-pulse-fill"),
+  theme = value_box_theme(bg = "#DC3545")
+  )
+```
+
+## Row 2 {height="75%)"}
+
+###  {width="50%"}
+
+```{r}
+# Plot of Total HIV New Infections by country in 2023
+NI_plotly
+
+```
+
+###  {width="50%"}
+
+```{r}
+# Plot of Total HIV Related Deaths by country in 2023
+  D_plotly
+```
+
+# MAP HIV NEW INFECTIONS (2010-2023)
+
+```{r}
+p
+
+```
+
+# MAP HIV RELATED DEATHS (2010-2023)
+
+```{r}
+p2 
+```
